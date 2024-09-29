@@ -36,18 +36,19 @@ app.post('/video', async (req, res) => {
     const outputDir = path.join(__dirname, 'frames');
     fs.mkdirSync(outputDir, { recursive: true });
 
-        await extractFrames(filePath, outputDir);
+    await extractFrames(filePath, outputDir);
 
-        const results = [];
-        for (let i = 1; i <= 5; i++) 
-        { 
-            const framePath = path.join(outputDir, `frame-${String(i).padStart(3, '0')}.png`);
-            const predictions = await detectHandPose(framePath);
-            results.push(predictions);
-        }
+    const results = [];
+    for (let i = 1; i <= 5; i++) 
+    { 
+        const framePath = path.join(outputDir, `frame-${String(i).padStart(3, '0')}.png`);
+        const predictions = await detectHandPose(framePath);
+        results.push(predictions);
+    }
 
-        res.status(200).json({ message: 'Vídeo recebido e frames processados com sucesso!', results });
-        console.log('Vídeo recebido e frames processados com sucesso!', results);
+    res.status(200).json({ message: 'Vídeo recebido e frames processados com sucesso!', results });
+        
+    console.log('Vídeo recebido e frames processados com sucesso!', results);
   
 });
 
