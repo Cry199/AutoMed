@@ -1,7 +1,9 @@
 /node_modules
 /video.mp4
 /frames
+/processed
 
 node_modules
 video.mp4
 frames
+processed
