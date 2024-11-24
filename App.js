@@ -21,8 +21,6 @@ const port = 3000;
 const framesDir = path.join(__dirname, 'frames');
 const processedDir = path.join(__dirname, 'processed');
 
-let faceDetector = null;
-
 // Monkey patch do ambiente
 faceapi.env.monkeyPatch({
     Canvas: canvas.Canvas,
@@ -42,7 +40,6 @@ async function initializeFaceApi() {
         console.log('Modelos de rosto carregados com sucesso.');
     } catch (error) {
         console.error('Erro ao carregar modelos ou inicializar o face-api.js:', error);
-        // throw error; // Propaga o erro para evitar que o sistema continue sem os modelos
     }
 }
 
@@ -95,6 +92,94 @@ let handposeModel = null;
     }
 })();
 
+// Função para verificar se a mão está próxima ao rosto
+async function isHandNearFace(hand, face) {
+    // Pontos-chave da mão
+    const fingerTip = hand.keypoints.find(kp => kp.name === 'index_finger_tip');
+
+    if (!fingerTip) {
+        console.warn('Ponta do dedo indicador não encontrada.');
+        return false;
+    }
+
+    // Verificar se os landmarks estão disponíveis
+    const landmarks = face.landmarks.positions;
+    if (!landmarks || landmarks.length < 68) {
+        console.warn('Landmarks faciais insuficientes.');
+        return false;
+    }
+
+    // Ponta do nariz (índice 30)
+    const noseTip = landmarks[30];
+
+    // Pontos da boca (índices 48 a 67)
+    const mouthPoints = landmarks.slice(48, 68);
+    const mouthCenter = mouthPoints.reduce((acc, point) => {
+        return {
+            x: acc.x + point.x / mouthPoints.length,
+            y: acc.y + point.y / mouthPoints.length
+        };
+    }, { x: 0, y: 0 });
+
+    // Calcular distâncias
+    const distanceToNose = Math.hypot(fingerTip.x - noseTip.x, fingerTip.y - noseTip.y);
+    const distanceToMouth = Math.hypot(fingerTip.x - mouthCenter.x, fingerTip.y - mouthCenter.y);
+
+    // Definir um limite para considerar como "mão próxima ao rosto"
+    const threshold = 50; // Ajuste conforme necessário
+
+    return distanceToNose < threshold || distanceToMouth < threshold;
+}
+
+// Função para desenhar as detecções no frame
+function drawDetections(ctx, hands, faces) {
+    // Configurações de cor para as mãos
+    const handColors = [
+        { point: 'blue', line: 'white' },
+        { point: 'red', line: 'yellow' }
+    ];
+
+    // Desenhar mãos detectadas
+    hands.forEach((hand, handIndex) => {
+        const color = handColors[handIndex % handColors.length];
+        ctx.fillStyle = color.point;
+        ctx.strokeStyle = color.line;
+        ctx.lineWidth = 2;
+
+        hand.keypoints.forEach(({ x, y }) => {
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    });
+
+    // Desenhar rostos detectados
+    faces.forEach((face) => {
+        const { alignedRect, landmarks } = face;
+
+        if (alignedRect) {
+            const { _x, _y, _width, _height } = alignedRect._box;
+
+            // Desenhar a caixa delimitadora do rosto
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(_x, _y, _width, _height);
+        }
+
+        if (landmarks) {
+            const points = landmarks.positions;
+            ctx.fillStyle = 'yellow';
+            points.forEach(({ x, y }) => {
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        } else {
+            console.warn('Landmarks ausentes para o rosto.');
+        }
+    });
+}
+
 // Função para detectar movimento e processar os frames
 async function detectMovement(frames) {
     console.log('Detectando movimento...');
@@ -110,23 +195,11 @@ async function detectMovement(frames) {
         try {
             console.log(`Processando o frame: ${framePath}`);
 
-            // Garantir backend "tensorflow" para decodificar imagens
-            if (tf.getBackend() !== 'tensorflow') {
-                await tf.setBackend('tensorflow');
-                await tf.ready();
-            }
-
             // Ler a imagem e convertê-la em canvas
             const image = await Jimp.read(framePath);
             const canvasImg = createCanvas(image.bitmap.width, image.bitmap.height);
             const ctx = canvasImg.getContext('2d');
             ctx.drawImage(await loadImage(framePath), 0, 0);
-
-            // Garantir backend "cpu" para usar os modelos
-            if (tf.getBackend() !== 'cpu') {
-                await tf.setBackend('cpu');
-                await tf.ready();
-            }
 
             // Detectar mãos no frame
             let hands = [];
@@ -147,41 +220,17 @@ async function detectMovement(frames) {
 
             // Processar mãos e rostos
             if (hands.length > 0 && faces.length > 0) {
-                // **Adicionar lógica para verificar se a mão está próxima ao rosto**
-
-                // Usar a primeira mão e o primeiro rosto detectados (você pode adaptar para múltiplos)
+                // Usar a primeira mão e o primeiro rosto detectados
                 const hand = hands[0];
                 const face = faces[0];
 
-                // Pontos-chave da mão (por exemplo, ponta do dedo indicador)
-                const fingerTip = hand.keypoints.find(kp => kp.name === 'index_finger_tip');
+                // Chamar a função de detecção
+                const isNear = await isHandNearFace(hand, face);
 
-                if (!fingerTip) {
-                    console.warn('Ponta do dedo indicador não encontrada.');
-                    continue;
-                }
-
-                // Pontos-chave do rosto (por exemplo, ponta do nariz)
-                const noseTip = face.landmarks.positions.find(pos => pos._label === 'nose');
-
-                if (!noseTip) {
-                    console.warn('Ponta do nariz não encontrada.');
-                    continue;
-                }
-
-                // Calcular a distância euclidiana entre a ponta do dedo e a ponta do nariz
-                const dx = fingerTip.x - noseTip.x;
-                const dy = fingerTip.y - noseTip.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-
-                // Definir um limite para considerar como "mão no rosto"
-                const threshold = 50; // Este valor pode precisar de ajustes
-
-                if (distance < threshold) {
+                if (isNear) {
                     console.log('Mão próxima ao rosto detectada!');
                     movementDetected = true;
-
-                    // Aqui você pode adicionar código para ações adicionais, como salvar uma notificação, etc.
+                    // Aqui você pode adicionar ações adicionais, como registrar o evento
                 } else {
                     console.log('Mão longe do rosto.');
                 }
@@ -189,8 +238,18 @@ async function detectMovement(frames) {
                 console.log(`Nenhuma mão ou rosto detectado no frame: ${framePath}`);
             }
 
-            // (Opcional) Prosseguir para desenhar os pontos no frame, se desejar
-            // ...
+            // Após a detecção, desenhar as detecções no frame
+            drawDetections(ctx, hands, faces);
+
+            // Salvar o frame processado
+            const processedPath = path.join(processedDir, path.basename(framePath));
+            const out = fs.createWriteStream(processedPath);
+            const stream = canvasImg.createJPEGStream();
+            stream.pipe(out);
+
+            out.on('finish', () => {
+                console.log(`Frame processado salvo em: ${processedPath}`);
+            });
 
         } catch (error) {
             console.error(`Erro ao processar o frame ${framePath}:`, error);
