@@ -1,0 +1,160 @@
+<!DOCTYPE HTML>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detecção de Movimento: Mão Próxima ao Rosto</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        .description {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .results {
+            margin-top: 20px;
+        }
+
+        video {
+            width: 400px;
+            height: 300px;
+            border: 2px solid #000;
+            margin-bottom: 10px;
+        }
+
+        #framesContainer {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .frame {
+            width: 150px;
+            height: 150px;
+            object-fit: cover;
+            border: 2px solid #000;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Detecção de Movimento: Mão Próxima ao Rosto</h1>
+    <div class="description">
+        <p>O sistema detecta se a mão de uma pessoa se aproxima do rosto com base nos frames enviados.</p>
+    </div>
+    <video id="preview" autoplay></video>
+    <button id="startRecording">Gravar 15 segundos e enviar frames</button>
+
+    <div id="framesContainer"></div>
+    <div class="results" id="results-container"></div>
+
+    <script>
+        const startRecordingButton = document.getElementById('startRecording');
+        const videoElement = document.getElementById('preview');
+        const framesContainer = document.getElementById('framesContainer');
+        let mediaRecorder;
+        let stream;
+        let frameCounter = 0;  // Contador de frames
+    
+        startRecordingButton.addEventListener('click', startRecording);
+    
+        async function startRecording() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                videoElement.srcObject = stream;
+    
+                frameCounter = 0;  // Reiniciar o contador
+    
+                // A cada 1 segundo, tirar um snapshot do vídeo
+                const intervalId = setInterval(() => {
+                    frameCounter++;
+                    const isLastFrame = frameCounter >= 15;  // Define se é o último frame
+    
+                    captureFrame(isLastFrame);
+                    
+                    if (isLastFrame) {
+                        clearInterval(intervalId);
+                        stream.getTracks().forEach(track => track.stop()); // Parar a captura da câmera
+                        console.log('Gravação concluída. Enviando para processamento...');
+                    }
+                }, 1000); // 1000ms = 1s
+    
+            } catch (err) {
+                console.error('Erro ao acessar a webcam: ', err);
+            }
+        }
+    
+        function captureFrame(isLastFrame) {
+            const canvas = document.createElement('canvas');
+            canvas.width = videoElement.videoWidth;
+            canvas.height = videoElement.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    
+            // Converter o frame para formato blob (imagem) e enviar ao backend
+            canvas.toBlob((blob) => {
+                if (blob) {
+                    sendFrame(blob, isLastFrame);
+                    displayFrame(blob);
+                }
+            }, 'image/jpeg', 0.95);
+        }
+    
+        function sendFrame(frameBlob, isLastFrame) {
+            const url = `/frame?isLastFrame=${isLastFrame}`;
+            fetch(url, {
+                method: 'POST',
+                body: frameBlob,
+                headers: {
+                    'Content-Type': 'application/octet-stream'
+                }
+            })
+                .then(response => {
+                    if (response.ok) {
+                        console.log('Frame enviado com sucesso.');
+                        if (isLastFrame) {
+                            loadResults();
+                        }
+                    } else {
+                        console.error('Erro ao enviar frame.');
+                    }
+                })
+                .catch(error => console.error('Erro na requisição: ', error));
+        }
+    
+        async function loadResults() {
+            try {
+                const response = await fetch('/results');
+                if (response.ok) {
+                    const data = await response.json();
+                    displayResults(data);
+                } else {
+                    console.error('Erro ao carregar os resultados.');
+                }
+            } catch (error) {
+                console.error('Erro na requisição para carregar os resultados:', error);
+            }
+        }
+    
+        function displayResults(data) {
+            const container = document.getElementById('results-container');
+            container.innerHTML = '';
+    
+            data.movements.forEach((movement, index) => {
+                const div = document.createElement('div');
+                div.innerHTML = `<p>Sessão ${index + 1}: Movimento detectado - ${movement.movementDetected ? 'Sim' : 'Não'}</p>`;
+                container.appendChild(div);
+            });
+        }
+    
+        window.onload = loadResults;
+    </script>
+</body>
+
+</html>
