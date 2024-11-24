@@ -116,10 +116,10 @@ async function detectMovement(frames) {
                 await tf.ready();
             }
 
-            // Ler a imagem com Jimp e convertê-la em canvas
+            // Ler a imagem e convertê-la em canvas
             const image = await Jimp.read(framePath);
-            const canvas = createCanvas(image.bitmap.width, image.bitmap.height);
-            const ctx = canvas.getContext('2d');
+            const canvasImg = createCanvas(image.bitmap.width, image.bitmap.height);
+            const ctx = canvasImg.getContext('2d');
             ctx.drawImage(await loadImage(framePath), 0, 0);
 
             // Garantir backend "cpu" para usar os modelos
@@ -131,7 +131,7 @@ async function detectMovement(frames) {
             // Detectar mãos no frame
             let hands = [];
             try {
-                hands = await handposeModel.estimateHands(tf.browser.fromPixels(canvas));
+                hands = await handposeModel.estimateHands(tf.browser.fromPixels(canvasImg));
             } catch (handError) {
                 console.warn(`Erro ao detectar mãos no frame: ${framePath}`, handError);
             }
@@ -139,72 +139,59 @@ async function detectMovement(frames) {
             // Detectar rostos no frame usando face-api.js
             let faces = [];
             try {
-                faces = await faceapi.detectAllFaces(canvas)
+                faces = await faceapi.detectAllFaces(canvasImg)
                     .withFaceLandmarks();
             } catch (faceError) {
                 console.warn(`Erro ao detectar rostos no frame: ${framePath}`, faceError);
             }
 
             // Processar mãos e rostos
-            if (hands.length > 0 || faces.length > 0) {
-                // Configurações de cor para as mãos
-                const handColors = [
-                    { point: 'blue', line: 'white' },
-                    { point: 'red', line: 'yellow' }
-                ];
+            if (hands.length > 0 && faces.length > 0) {
+                // **Adicionar lógica para verificar se a mão está próxima ao rosto**
 
-                // Desenhar mãos detectadas
-                hands.forEach((hand, handIndex) => {
-                    const color = handColors[handIndex % handColors.length];
-                    ctx.fillStyle = color.point;
-                    ctx.strokeStyle = color.line;
-                    ctx.lineWidth = 2;
+                // Usar a primeira mão e o primeiro rosto detectados (você pode adaptar para múltiplos)
+                const hand = hands[0];
+                const face = faces[0];
 
-                    hand.keypoints.forEach(({ x, y }) => {
-                        ctx.beginPath();
-                        ctx.arc(x, y, 5, 0, Math.PI * 2);
-                        ctx.fill();
-                    });
-                });
+                // Pontos-chave da mão (por exemplo, ponta do dedo indicador)
+                const fingerTip = hand.keypoints.find(kp => kp.name === 'index_finger_tip');
 
-                // Desenhar rostos detectados
-                faces.forEach((face) => {
-                    const { alignedRect, landmarks } = face;
+                if (!fingerTip) {
+                    console.warn('Ponta do dedo indicador não encontrada.');
+                    continue;
+                }
 
-                    if (alignedRect) {
-                        const { _x, _y, _width, _height } = alignedRect._box;
+                // Pontos-chave do rosto (por exemplo, ponta do nariz)
+                const noseTip = face.landmarks.positions.find(pos => pos._label === 'nose');
 
-                        // Desenhar a caixa delimitadora do rosto
-                        ctx.strokeStyle = 'green';
-                        ctx.lineWidth = 3;
-                        ctx.strokeRect(_x, _y, _width, _height);
-                    }
+                if (!noseTip) {
+                    console.warn('Ponta do nariz não encontrada.');
+                    continue;
+                }
 
-                    if (landmarks) {
-                        const points = landmarks.positions;
-                        ctx.fillStyle = 'red';
-                        points.forEach(({ x, y }) => {
-                            ctx.beginPath();
-                            ctx.arc(x, y, 3, 0, Math.PI * 2);
-                            ctx.fill();
-                        });
-                    } else {
-                        console.warn(`Landmarks ausentes para o rosto no frame: ${framePath}`);
-                    }
-                });
+                // Calcular a distância euclidiana entre a ponta do dedo e a ponta do nariz
+                const dx = fingerTip.x - noseTip.x;
+                const dy = fingerTip.y - noseTip.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
 
-                // Salvar o frame processado
-                const processedPath = path.join(processedDir, path.basename(framePath));
-                const out = fs.createWriteStream(processedPath);
-                const stream = canvas.createJPEGStream();
-                stream.pipe(out);
+                // Definir um limite para considerar como "mão no rosto"
+                const threshold = 50; // Este valor pode precisar de ajustes
 
-                out.on('finish', () => {
-                    console.log(`Frame processado salvo em: ${processedPath}`);
-                });
+                if (distance < threshold) {
+                    console.log('Mão próxima ao rosto detectada!');
+                    movementDetected = true;
+
+                    // Aqui você pode adicionar código para ações adicionais, como salvar uma notificação, etc.
+                } else {
+                    console.log('Mão longe do rosto.');
+                }
             } else {
                 console.log(`Nenhuma mão ou rosto detectado no frame: ${framePath}`);
             }
+
+            // (Opcional) Prosseguir para desenhar os pontos no frame, se desejar
+            // ...
+
         } catch (error) {
             console.error(`Erro ao processar o frame ${framePath}:`, error);
         }
