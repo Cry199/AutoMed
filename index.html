@@ -78,7 +78,7 @@
                 // A cada 100 ms, tirar um snapshot do vídeo
                 const intervalId = setInterval(() => {
                     frameCounter++;
-                    const isLastFrame = frameCounter >= 100; // Define se é o último frame
+                    const isLastFrame = frameCounter >= 20; // Define se é o último frame
 
                     captureFrame(isLastFrame);
 
