@@ -1,11 +1,6 @@
-const Jimp = require('jimp');
+const tf = require('@tensorflow/tfjs-node');
 
-async function testJimp() 
-{
+console.log('tf.version.tfjs');
 
-    const image = await Jimp.read('C:/Users/caual/OneDrive/Imagens/a/teste.jpg');
-    
-    console.log('Imagem carregada com sucesso!', image);
-}
-
-testJimp();
+const tensor = tf.tensor([1, 2, 3, 4], [2, 2]);
+tensor.print();
