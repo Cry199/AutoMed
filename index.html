@@ -54,6 +54,8 @@
     <div id="framesContainer"></div>
     <div class="results" id="results-container"></div>
 
+    <div id="processedFramesContainer"></div>
+
     <script>
         const startRecordingButton = document.getElementById('startRecording');
         const videoElement = document.getElementById('preview');
@@ -61,42 +63,42 @@
         let mediaRecorder;
         let stream;
         let frameCounter = 0;  // Contador de frames
-    
+
         startRecordingButton.addEventListener('click', startRecording);
-    
+
         async function startRecording() {
             try {
                 stream = await navigator.mediaDevices.getUserMedia({ video: true });
                 videoElement.srcObject = stream;
-    
+
                 frameCounter = 0;  // Reiniciar o contador
-    
+
                 // A cada 1 segundo, tirar um snapshot do vídeo
                 const intervalId = setInterval(() => {
                     frameCounter++;
                     const isLastFrame = frameCounter >= 15;  // Define se é o último frame
-    
+
                     captureFrame(isLastFrame);
-                    
+
                     if (isLastFrame) {
                         clearInterval(intervalId);
                         stream.getTracks().forEach(track => track.stop()); // Parar a captura da câmera
                         console.log('Gravação concluída. Enviando para processamento...');
                     }
                 }, 1000); // 1000ms = 1s
-    
+
             } catch (err) {
                 console.error('Erro ao acessar a webcam: ', err);
             }
         }
-    
+
         function captureFrame(isLastFrame) {
             const canvas = document.createElement('canvas');
             canvas.width = videoElement.videoWidth;
             canvas.height = videoElement.videoHeight;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-    
+
             // Converter o frame para formato blob (imagem) e enviar ao backend
             canvas.toBlob((blob) => {
                 if (blob) {
@@ -105,7 +107,7 @@
                 }
             }, 'image/jpeg', 0.95);
         }
-    
+
         function sendFrame(frameBlob, isLastFrame) {
             const url = `/frame?isLastFrame=${isLastFrame}`;
             fetch(url, {
@@ -127,7 +129,7 @@
                 })
                 .catch(error => console.error('Erro na requisição: ', error));
         }
-    
+
         async function loadResults() {
             try {
                 const response = await fetch('/results');
@@ -141,18 +143,43 @@
                 console.error('Erro na requisição para carregar os resultados:', error);
             }
         }
-    
+
         function displayResults(data) {
             const container = document.getElementById('results-container');
             container.innerHTML = '';
-    
+
             data.movements.forEach((movement, index) => {
                 const div = document.createElement('div');
                 div.innerHTML = `<p>Sessão ${index + 1}: Movimento detectado - ${movement.movementDetected ? 'Sim' : 'Não'}</p>`;
                 container.appendChild(div);
             });
         }
-    
+
+        async function loadProcessedFrames() {
+            const container = document.getElementById('framesContainer');
+            container.innerHTML = '';
+
+            try {
+                const response = await fetch('/processed');
+                const frames = await response.json();
+
+                frames.forEach((frame) => {
+                    const img = document.createElement('img');
+                    img.src = `/processed/${frame}`;
+                    img.alt = 'Frame processado';
+                    img.className = 'frame';
+                    container.appendChild(img);
+                });
+            } catch (error) {
+                console.error('Erro ao carregar frames processados:', error);
+            }
+        }
+        
+        window.onload = () => {
+            loadResults();
+            loadProcessedFrames();
+        };
+
         window.onload = loadResults;
     </script>
 </body>
