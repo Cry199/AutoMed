@@ -14,6 +14,10 @@ const cert = fs.readFileSync(path.join(__dirname, 'server.cert'));
 const app = express();
 const port = 3000;
 
+const { createCanvas, loadImage } = require('canvas');
+const processedPath = framePath.replace('frames', 'processed');
+
+
 const framesDir = path.join(__dirname, 'frames');
 fs.mkdirSync(framesDir, { recursive: true });
 
@@ -22,6 +26,9 @@ let detectedMovements = [];
 
 app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
 app.use('/frames', express.static(framesDir));
+
+app.use('/processed', express.static(path.join(__dirname, 'processed')));
+
 
 let handposeModel = null;
 
@@ -71,6 +78,7 @@ async function detectMovement(frames) {
                 await tf.ready();
             }
 
+            // Estimar mãos no frame
             const hands = await handposeModel.estimateHands(imageTensor);
 
             // Volte ao backend TensorFlow para outras operações
@@ -79,7 +87,55 @@ async function detectMovement(frames) {
 
             // Continuar o processamento se mãos forem detectadas
             if (hands.length > 0) {
-                const handPosition = hands[0].landmarks[0]; // Coordenadas do primeiro ponto da mão
+                const hand = hands[0];
+                const handPosition = hand.landmarks[0]; // Coordenadas do primeiro ponto da mão
+
+                // Criar um canvas para desenhar a imagem e as marcações
+                const canvas = createCanvas(image.bitmap.width, image.bitmap.height);
+                const ctx = canvas.getContext('2d');
+
+                // Carregar a imagem original no canvas
+                const img = await loadImage(framePath);
+                ctx.drawImage(img, 0, 0);
+
+                // Configurar estilos de desenho
+                ctx.fillStyle = 'blue'; // Cor para os pontos
+                ctx.strokeStyle = 'white'; // Cor para as conexões
+                ctx.lineWidth = 2;
+
+                // Desenhar os pontos
+                hand.landmarks.forEach(([x, y]) => {
+                    ctx.beginPath();
+                    ctx.arc(x, y, 5, 0, Math.PI * 2); // Raio de 5px
+                    ctx.fill();
+                });
+
+                // Desenhar as conexões
+                const connections = [
+                    [0, 1], [1, 2], [2, 3], [3, 4], // Polegar
+                    [0, 5], [5, 6], [6, 7], [7, 8], // Indicador
+                    [0, 9], [9, 10], [10, 11], [11, 12], // Médio
+                    [0, 13], [13, 14], [14, 15], [15, 16], // Anelar
+                    [0, 17], [17, 18], [18, 19], [19, 20] // Mínimo
+                ];
+                connections.forEach(([start, end]) => {
+                    const [x1, y1] = hand.landmarks[start];
+                    const [x2, y2] = hand.landmarks[end];
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                });
+
+                // Salvar o frame processado
+                const processedPath = framePath.replace('frames', 'processed'); // Ex: mover para uma pasta "processed"
+                const out = fs.createWriteStream(processedPath);
+                const stream = canvas.createJPEGStream();
+                stream.pipe(out);
+
+                out.on('finish', () => {
+                    console.log(`Frame processado salvo em: ${processedPath}`);
+                });
 
                 if (lastHandPosition) {
                     // Calcular a distância entre a posição atual e a última
