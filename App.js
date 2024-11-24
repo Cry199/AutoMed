@@ -2,9 +2,13 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 
-const tf = require('@tensorflow/tfjs-node'); // Importando o TensorFlow.js no backend Node.js
-const handpose = require('@tensorflow-models/handpose');
+const tf = require('@tensorflow/tfjs-node');
+const handPoseDetection = require('@tensorflow-models/hand-pose-detection');
+const { MediaPipeHands } = handPoseDetection.SupportedModels;
+
 const faceapi = require('@vladmandic/face-api');
+const canvas = require('canvas');
+const { createCanvas, loadImage } = canvas;
 const Jimp = require('jimp');
 
 const https = require('https');
@@ -14,121 +18,183 @@ const cert = fs.readFileSync(path.join(__dirname, 'server.cert'));
 const app = express();
 const port = 3000;
 
-const { createCanvas, loadImage } = require('canvas');
-const processedPath = framePath.replace('frames', 'processed');
-
-
 const framesDir = path.join(__dirname, 'frames');
+const processedDir = path.join(__dirname, 'processed');
+
+let faceDetector = null;
+
+// Monkey patch do ambiente
+faceapi.env.monkeyPatch({
+    Canvas: canvas.Canvas,
+    Image: canvas.Image,
+    ImageData: canvas.ImageData
+});
+
+async function initializeFaceApi() {
+    const modelPath = path.join(__dirname, 'models'); // Diretório onde os modelos estão armazenados
+    console.log(`Carregando modelos do caminho: ${modelPath}`);
+
+    try {
+        await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelPath); // Modelo de detecção de rosto
+        await faceapi.nets.faceLandmark68Net.loadFromDisk(modelPath); // Modelo de landmarks faciais
+        await faceapi.nets.faceRecognitionNet.loadFromDisk(modelPath); // Modelo de reconhecimento facial
+
+        console.log('Modelos de rosto carregados com sucesso.');
+    } catch (error) {
+        console.error('Erro ao carregar modelos ou inicializar o face-api.js:', error);
+        // throw error; // Propaga o erro para evitar que o sistema continue sem os modelos
+    }
+}
+
+initializeFaceApi();
+
+// Tornar os arquivos estáticos acessíveis
+app.use('/processed', express.static(processedDir));
+
+// Endpoint para listar frames processados
+app.get('/processed-frames', (req, res) => {
+    fs.readdir(processedDir, (err, files) => {
+        if (err) {
+            console.error('Erro ao listar arquivos processados:', err);
+            return res.status(500).json({ message: 'Erro ao listar frames processados.' });
+        }
+        res.json(files); // Retorna a lista de arquivos processados
+    });
+});
+
+// Criação das pastas necessárias
 fs.mkdirSync(framesDir, { recursive: true });
+fs.mkdirSync(processedDir, { recursive: true });
 
 let sessionFrames = [];
 let detectedMovements = [];
 
 app.use(express.raw({ type: 'application/octet-stream', limit: '10mb' }));
 app.use('/frames', express.static(framesDir));
-
-app.use('/processed', express.static(path.join(__dirname, 'processed')));
-
+app.use('/processed', express.static(processedDir));
 
 let handposeModel = null;
 
+// Inicializar modelos de mão e rosto
 (async () => {
     try {
         await tf.ready();
-        await tf.setBackend('cpu'); // Usando o backend CPU para suporte ao modelo Handpose
+        await tf.setBackend('cpu');
         console.log("TensorFlow está usando o backend:", tf.getBackend());
 
-        // Carregando modelos necessários
-        const modelPath = path.join(__dirname, 'models');
-        await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelPath);
-        handposeModel = await handpose.load();
-        console.log('Modelos carregados com sucesso.');
+        handposeModel = await handPoseDetection.createDetector(MediaPipeHands, {
+            runtime: 'tfjs',
+            modelType: 'full'
+        });
+
+        await faceapi.nets.ssdMobilenetv1.loadFromDisk(path.join(__dirname, 'models')); // Carregar modelo de detecção
+        await faceapi.nets.faceLandmark68Net.loadFromDisk(path.join(__dirname, 'models')); // Carregar landmarks
+        console.log('Modelos de mãos e rosto carregados com sucesso.');
     } catch (error) {
         console.error("Erro ao inicializar TensorFlow ou carregar modelos:", error);
     }
 })();
 
+// Função para detectar movimento e processar os frames
 async function detectMovement(frames) {
     console.log('Detectando movimento...');
 
     if (!handposeModel) {
-        console.error('Modelo Handpose não carregado.');
-        throw new Error('Modelo Handpose não carregado.');
+        console.error('Modelo de detecção de mãos não carregado.');
+        throw new Error('Modelo de detecção de mãos não carregado.');
     }
 
-    let lastHandPosition = null;
     let movementDetected = false;
 
     for (const framePath of frames) {
         try {
-            // Certifique-se de usar o backend TensorFlow para decodificar imagens
+            console.log(`Processando o frame: ${framePath}`);
+
+            // Garantir backend "tensorflow" para decodificar imagens
             if (tf.getBackend() !== 'tensorflow') {
                 await tf.setBackend('tensorflow');
                 await tf.ready();
             }
 
-            // Leitura e conversão da imagem usando Jimp
+            // Ler a imagem com Jimp e convertê-la em canvas
             const image = await Jimp.read(framePath);
-            const buffer = await image.getBufferAsync(Jimp.MIME_PNG);
-            const imageTensor = tf.node.decodeImage(buffer, 3);
+            const canvas = createCanvas(image.bitmap.width, image.bitmap.height);
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(await loadImage(framePath), 0, 0);
 
-            // Altere para o backend CPU para executar o modelo Handpose
+            // Garantir backend "cpu" para usar os modelos
             if (tf.getBackend() !== 'cpu') {
                 await tf.setBackend('cpu');
                 await tf.ready();
             }
 
-            // Estimar mãos no frame
-            const hands = await handposeModel.estimateHands(imageTensor);
+            // Detectar mãos no frame
+            let hands = [];
+            try {
+                hands = await handposeModel.estimateHands(tf.browser.fromPixels(canvas));
+            } catch (handError) {
+                console.warn(`Erro ao detectar mãos no frame: ${framePath}`, handError);
+            }
 
-            // Volte ao backend TensorFlow para outras operações
-            await tf.setBackend('tensorflow');
-            await tf.ready();
+            // Detectar rostos no frame usando face-api.js
+            let faces = [];
+            try {
+                faces = await faceapi.detectAllFaces(canvas)
+                    .withFaceLandmarks();
+            } catch (faceError) {
+                console.warn(`Erro ao detectar rostos no frame: ${framePath}`, faceError);
+            }
 
-            // Continuar o processamento se mãos forem detectadas
-            if (hands.length > 0) {
-                const hand = hands[0];
-                const handPosition = hand.landmarks[0]; // Coordenadas do primeiro ponto da mão
+            // Processar mãos e rostos
+            if (hands.length > 0 || faces.length > 0) {
+                // Configurações de cor para as mãos
+                const handColors = [
+                    { point: 'blue', line: 'white' },
+                    { point: 'red', line: 'yellow' }
+                ];
 
-                // Criar um canvas para desenhar a imagem e as marcações
-                const canvas = createCanvas(image.bitmap.width, image.bitmap.height);
-                const ctx = canvas.getContext('2d');
+                // Desenhar mãos detectadas
+                hands.forEach((hand, handIndex) => {
+                    const color = handColors[handIndex % handColors.length];
+                    ctx.fillStyle = color.point;
+                    ctx.strokeStyle = color.line;
+                    ctx.lineWidth = 2;
 
-                // Carregar a imagem original no canvas
-                const img = await loadImage(framePath);
-                ctx.drawImage(img, 0, 0);
-
-                // Configurar estilos de desenho
-                ctx.fillStyle = 'blue'; // Cor para os pontos
-                ctx.strokeStyle = 'white'; // Cor para as conexões
-                ctx.lineWidth = 2;
-
-                // Desenhar os pontos
-                hand.landmarks.forEach(([x, y]) => {
-                    ctx.beginPath();
-                    ctx.arc(x, y, 5, 0, Math.PI * 2); // Raio de 5px
-                    ctx.fill();
+                    hand.keypoints.forEach(({ x, y }) => {
+                        ctx.beginPath();
+                        ctx.arc(x, y, 5, 0, Math.PI * 2);
+                        ctx.fill();
+                    });
                 });
 
-                // Desenhar as conexões
-                const connections = [
-                    [0, 1], [1, 2], [2, 3], [3, 4], // Polegar
-                    [0, 5], [5, 6], [6, 7], [7, 8], // Indicador
-                    [0, 9], [9, 10], [10, 11], [11, 12], // Médio
-                    [0, 13], [13, 14], [14, 15], [15, 16], // Anelar
-                    [0, 17], [17, 18], [18, 19], [19, 20] // Mínimo
-                ];
-                connections.forEach(([start, end]) => {
-                    const [x1, y1] = hand.landmarks[start];
-                    const [x2, y2] = hand.landmarks[end];
-                    ctx.beginPath();
-                    ctx.moveTo(x1, y1);
-                    ctx.lineTo(x2, y2);
-                    ctx.stroke();
+                // Desenhar rostos detectados
+                faces.forEach((face) => {
+                    const { alignedRect, landmarks } = face;
+
+                    if (alignedRect) {
+                        const { _x, _y, _width, _height } = alignedRect._box;
+
+                        // Desenhar a caixa delimitadora do rosto
+                        ctx.strokeStyle = 'green';
+                        ctx.lineWidth = 3;
+                        ctx.strokeRect(_x, _y, _width, _height);
+                    }
+
+                    if (landmarks) {
+                        const points = landmarks.positions;
+                        ctx.fillStyle = 'red';
+                        points.forEach(({ x, y }) => {
+                            ctx.beginPath();
+                            ctx.arc(x, y, 3, 0, Math.PI * 2);
+                            ctx.fill();
+                        });
+                    } else {
+                        console.warn(`Landmarks ausentes para o rosto no frame: ${framePath}`);
+                    }
                 });
 
                 // Salvar o frame processado
-                const processedPath = framePath.replace('frames', 'processed'); // Ex: mover para uma pasta "processed"
+                const processedPath = path.join(processedDir, path.basename(framePath));
                 const out = fs.createWriteStream(processedPath);
                 const stream = canvas.createJPEGStream();
                 stream.pipe(out);
@@ -136,27 +202,9 @@ async function detectMovement(frames) {
                 out.on('finish', () => {
                     console.log(`Frame processado salvo em: ${processedPath}`);
                 });
-
-                if (lastHandPosition) {
-                    // Calcular a distância entre a posição atual e a última
-                    const distance = Math.sqrt(
-                        Math.pow(handPosition[0] - lastHandPosition[0], 2) +
-                        Math.pow(handPosition[1] - lastHandPosition[1], 2)
-                    );
-
-                    // Configurar um critério para considerar movimento
-                    if (distance > 10) {
-                        console.log('Movimento detectado: Mão movida significativamente.');
-                        movementDetected = true;
-                        break;
-                    }
-                }
-
-                lastHandPosition = handPosition;
+            } else {
+                console.log(`Nenhuma mão ou rosto detectado no frame: ${framePath}`);
             }
-
-            // Limpeza do tensor para evitar vazamento de memória
-            imageTensor.dispose();
         } catch (error) {
             console.error(`Erro ao processar o frame ${framePath}:`, error);
         }
@@ -164,7 +212,6 @@ async function detectMovement(frames) {
 
     return movementDetected;
 }
-
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
