@@ -75,10 +75,10 @@
 
                 frameCounter = 0; // Reiniciar o contador
 
-                // A cada 1 segundo, tirar um snapshot do vídeo
+                // A cada 100 ms, tirar um snapshot do vídeo
                 const intervalId = setInterval(() => {
                     frameCounter++;
-                    const isLastFrame = frameCounter >= 15; // Define se é o último frame
+                    const isLastFrame = frameCounter >= 100; // Define se é o último frame
 
                     captureFrame(isLastFrame);
 
@@ -87,17 +87,18 @@
                         stream.getTracks().forEach(track => track.stop()); // Parar a captura da câmera
                         console.log('Gravação concluída. Enviando para processamento...');
                     }
-                }, 1000); // 1000ms = 1s
+                }, 100); // 100ms
 
             } catch (err) {
                 console.error('Erro ao acessar a webcam: ', err);
             }
+
         }
 
         function captureFrame(isLastFrame) {
             const canvas = document.createElement('canvas');
-            canvas.width = videoElement.videoWidth;
-            canvas.height = videoElement.videoHeight;
+            canvas.width = 360; // Definir largura para 360 pixels
+            canvas.height = 270; // Definir altura para 270 pixels
             const ctx = canvas.getContext('2d');
             ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
 
@@ -106,7 +107,7 @@
                 if (blob) {
                     sendFrame(blob, isLastFrame);
                 }
-            }, 'image/jpeg', 0.95);
+            }, 'image/jpeg', 0.9); // Qualidade de 90%
         }
 
         function sendFrame(frameBlob, isLastFrame) {
