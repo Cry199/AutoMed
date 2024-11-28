@@ -1,0 +1,240 @@
+<!DOCTYPE HTML>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detecção de Movimento: Mão Próxima ao Rosto</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        .description {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .results {
+            margin-top: 20px;
+        }
+
+        video {
+            width: 400px;
+            height: 300px;
+            border: 2px solid #000;
+            margin-bottom: 10px;
+        }
+
+        #framesContainer,
+        #processedFramesContainer {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .frame {
+            width: 150px;
+            height: 150px;
+            object-fit: cover;
+            border: 2px solid #000;
+        }
+
+        .automed-info {
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #f0f8ff;
+            border-radius: 10px;
+            border: 2px solid #27485C;
+        }
+
+        .automed-info h2 {
+            color: #27485C;
+        }
+
+        .automed-info p {
+            color: #333;
+            font-size: 16px;
+        }
+
+        .button-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100px;
+            /* Ajuste conforme necessário */
+            margin-top: 20px;
+            /* Espaçamento adicional opcional */
+        }
+    </style>
+</head>
+
+<body>
+    <div class="automed-info">
+        <h1>Detecção de Movimento: Mão Próxima ao Rosto foi por AutoMed</h1>
+        <div class="description">
+            <p>O sistema detecta se a mão de uma pessoa se aproxima do rosto com base nos frames enviados.</p>
+        </div>
+
+        <h2>O que é o AutoMed?</h2>
+        <p>
+            O AutoMed é um sistema inteligente que auxilia na gestão de medicamentos e monitoramento de saúde.
+            Ele utiliza tecnologias avançadas, como detecção de movimento e processamento de vídeo, para identificar
+            comportamentos,
+            como levar a mão ao rosto, e oferece ferramentas para rastrear o uso de medicamentos, criar alertas
+            personalizados e
+            gerar relatórios detalhados para usuários e profissionais de saúde.
+        </p>
+        <p>
+            O objetivo do AutoMed é melhorar a adesão ao tratamento e fornecer suporte prático para quem precisa
+            gerenciar
+            múltiplos medicamentos ou monitorar hábitos de saúde.
+        </p>
+
+        <!-- Vídeo e botão de gravação -->
+        <video id="preview" autoplay></video>
+        <div class="button-container">
+            <button id="startRecording">Gravar 15 segundos e enviar frames</button>
+        </div>
+
+        <!-- Contêiner para os frames capturados -->
+        <div id="framesContainer"></div>
+
+        <!-- Resultados -->
+        <div class="results" id="results-container"></div>
+
+        <h2>Frames Processados</h2>
+        <div id="processedFramesContainer"></div>
+
+    </div>
+    <script>
+        const startRecordingButton = document.getElementById('startRecording');
+        const videoElement = document.getElementById('preview');
+        const framesContainer = document.getElementById('framesContainer');
+        const processedFramesContainer = document.getElementById('processedFramesContainer');
+        let stream;
+        let frameCounter = 0; // Contador de frames
+
+        startRecordingButton.addEventListener('click', startRecording);
+
+        async function startRecording() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                videoElement.srcObject = stream;
+
+                frameCounter = 0; // Reiniciar o contador
+
+                // A cada 100 ms, tirar um snapshot do vídeo
+                const intervalId = setInterval(() => {
+                    frameCounter++;
+                    const isLastFrame = frameCounter >= 100;
+
+                    captureFrame(isLastFrame);
+
+                    if (isLastFrame) {
+                        clearInterval(intervalId);
+                        stream.getTracks().forEach(track => track.stop()); // Parar a captura da câmera
+                        console.log('Gravação concluída. Enviando para processamento...');
+                    }
+                }, 100); // 100ms
+
+            } catch (err) {
+                console.error('Erro ao acessar a webcam: ', err);
+            }
+
+        }
+
+        function captureFrame(isLastFrame) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 360; // Definir largura para 360 pixels
+            canvas.height = 270; // Definir altura para 270 pixels
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+
+            // Converter o frame para formato blob (imagem) e enviar ao backend
+            canvas.toBlob((blob) => {
+                if (blob) {
+                    sendFrame(blob, isLastFrame);
+                }
+            }, 'image/jpeg', 0.9); // Qualidade de 90%
+        }
+
+        function sendFrame(frameBlob, isLastFrame) {
+            const url = `/frame?isLastFrame=${isLastFrame}`;
+            fetch(url, {
+                method: 'POST',
+                body: frameBlob,
+                headers: {
+                    'Content-Type': 'application/octet-stream'
+                }
+            })
+                .then(response => {
+                    if (response.ok) {
+                        console.log('Frame enviado com sucesso.');
+                        if (isLastFrame) {
+                            loadResults();
+                            loadProcessedFrames(); // Atualizar os frames processados
+                        }
+                    } else {
+                        console.error('Erro ao enviar frame.');
+                    }
+                })
+                .catch(error => console.error('Erro na requisição: ', error));
+        }
+
+        async function loadResults() {
+            try {
+                const response = await fetch('/results');
+                if (response.ok) {
+                    const data = await response.json();
+                    displayResults(data);
+                } else {
+                    console.error('Erro ao carregar os resultados.');
+                }
+            } catch (error) {
+                console.error('Erro na requisição para carregar os resultados:', error);
+            }
+        }
+
+        function displayResults(data) {
+            const container = document.getElementById('results-container');
+            container.innerHTML = '';
+
+            data.movements.forEach((movement, index) => {
+                const div = document.createElement('div');
+                div.innerHTML = `<p>Sessão ${index + 1}: Movimento detectado - ${movement.movementDetected ? 'Sim' : 'Não'}</p>`;
+                container.appendChild(div);
+            });
+        }
+
+        async function loadProcessedFrames() {
+            processedFramesContainer.innerHTML = '';
+
+            try {
+                const response = await fetch('/processed-frames'); // Acessa o endpoint correto
+                const frames = await response.json();
+
+                frames.forEach((frame) => {
+                    const img = document.createElement('img');
+                    img.src = `/processed/${frame}`; // Gera o caminho para o arquivo
+                    img.alt = 'Frame processado';
+                    img.className = 'frame';
+                    processedFramesContainer.appendChild(img);
+                });
+            } catch (error) {
+                console.error('Erro ao carregar frames processados:', error);
+            }
+        }
+
+        window.onload = () => {
+
+            loadResults(); // Se já existir essa função para carregar outros dados
+            loadProcessedFrames(); // Manter carregamento de frames processados
+        };
+    </script>
+</body>
+
+</html>
